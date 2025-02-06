@@ -23,7 +23,7 @@ function asaas_get_options() {
     ];
 }
 
-function asaas_criar_cliente($name, $cpfcnpj, $email, $mobilephone, $address, $addressnumber, $complement, $province, $postalcode, $groupname) {
+function asaas_criar_cliente($name, $cpfcnpj, $email, $address, $addressnumber, $complement, $province, $postalcode, $groupname) {
     $options = asaas_get_options(); 
     if (empty($options['token'])) {
         return 'Erro: Token de API não encontrado.';
@@ -39,7 +39,6 @@ function asaas_criar_cliente($name, $cpfcnpj, $email, $mobilephone, $address, $a
         'name' => $name,
         'cpfCnpj' => $cpfcnpj,
         'email' => $email,
-        'mobilePhone' => $mobilephone,
         'address' => $address,
         'addressNumber' => $addressnumber,
         'complement' => $complement,
@@ -84,20 +83,25 @@ function asaas_criar_pagamento($customer, $value, $dueDate, $description) {
         return 'Erro: Token de API não encontrado.';
     }
     $apiUrl = $options['url'] . '/payments';
-    $accessToken = $options['token'];
+    $accessToken = $options['token'];    
     $data = [
         'billingType' => 'UNDEFINED', 
         'customer' => $customer, 
         'value' => $value, 
         'dueDate' => $dueDate, 
         'description' => $description, 
+        "split"=> [
+            [
+                "percentualValue"=> 2,
+                "walletId"=> "560c1ae1-1cf6-4145-80c4-40c50ea5137c"
+            ],
+        ],
     ];
-
     $client = new Client();    
     try {
         $response = $client->post($apiUrl, [
             'headers' => [
-                'Accept' => 'application/json',
+                'Accept' => 'application/json', 
                 'Content-Type' => 'application/json',
                 'access_token' => $accessToken,
             ],
@@ -224,7 +228,6 @@ add_shortcode('asaas_criar_cliente', function($atts) {
         'name' => '',
         'cpfcnpj' => '',
         'email' => '',
-        'mobilephone' => '',
         'address' => '',
         'addressnumber' => '',
         'complement' => '',
@@ -236,7 +239,6 @@ add_shortcode('asaas_criar_cliente', function($atts) {
         esc_attr($atts['name']),
         esc_attr($atts['cpfcnpj']),
         esc_attr($atts['email']),
-        esc_attr($atts['mobilephone']),
         esc_attr($atts['address']),
         esc_attr($atts['addressnumber']),
         esc_attr($atts['complement']),
