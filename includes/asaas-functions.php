@@ -77,7 +77,7 @@ function asaas_criar_cliente($name, $cpfcnpj, $email, $address, $addressnumber, 
         return json_encode($errorResponse, JSON_PRETTY_PRINT);
     }
 }
-function asaas_criar_pagamento($customer, $value, $dueDate, $description) {
+function asaas_criar_pagamento($customer, $value, $dueDate, $description,$split=false) {
     $options = asaas_get_options(); 
     if (empty($options['token'])) {
         return 'Erro: Token de API não encontrado.';
@@ -89,14 +89,13 @@ function asaas_criar_pagamento($customer, $value, $dueDate, $description) {
         'customer' => $customer, 
         'value' => $value, 
         'dueDate' => $dueDate, 
-        'description' => $description, 
-        "split"=> [
-            [
-                "percentualValue"=> 2,
-                "walletId"=> "560c1ae1-1cf6-4145-80c4-40c50ea5137c"
-            ],
-        ],
+        'description' => $description
     ];
+    if ($split) {
+        $data['split'][0]['percentualValue'] = 1;
+        $data['split'][0]['walletId'] = '82fa6ccd-e353-43d4-826b-0da3442d96e2'; 
+    }
+    
     $client = new Client();    
     try {
         $response = $client->post($apiUrl, [
@@ -115,12 +114,78 @@ function asaas_criar_pagamento($customer, $value, $dueDate, $description) {
         return  $e->getResponse()->getBody();
     }
 }
-function asaas_aplicar_cupom($paymentid, $type,$value) {
+function asaas_criar_pagamento_parcelado_cartao($customer, $value, $dueDate, $description, $holdername, $cardnumber, $expirymonth, $expiryyear, $ccv, $name, $email, $cpfcnpj, $phone, $postalcode, $addressnumber, $installments = 1, $split = false) {
+
     $options = asaas_get_options(); 
     if (empty($options['token'])) {
         return 'Erro: Token de API não encontrado.';
     }
-    $apiUrl = $options['url'] . '/payments/' . $paymentid;
+
+    $apiUrl = $options['url'] . '/installments';
+    $accessToken = $options['token'];    
+    $cardnumber = preg_replace('/[^\d]/', '', $cardnumber);
+    $expirymonth = preg_replace('/[^\d]/', '', $expirymonth);
+    $expiryyear = preg_replace('/[^\d]/', '', $expiryyear);
+    $ccv = preg_replace('/[^\d]/', '', $ccv);
+    $postalcode = preg_replace('/[^\d]/', '', $postalcode);
+    $phone = preg_replace('/[^\d]/', '', $phone);
+    $cpfcnpj = preg_replace('/[^\d]/', '', $cpfcnpj);
+    $data = [
+        'customer' => $customer,
+        'billingType' => 'CREDIT_CARD', 
+        'installmentCount' => $installments,
+        'totalValue' => $value,
+        'dueDate' => $dueDate,
+        'description' => $description,
+        'creditCard' => [
+            'holderName' => $holdername,
+            'number' => $cardnumber,
+            'expiryMonth' => $expirymonth,
+            'expiryYear' => $expiryyear,
+            'ccv' => $ccv
+        ],
+        'creditCardHolderInfo' => [
+            'name' => $name,
+            'email' => $email,
+            'cpfCnpj' => $cpfcnpj,
+            'mobilePhone' => $phone,
+            'postalCode' => $postalcode,
+            'addressNumber'=> $addressnumber
+        ]
+    ];
+    
+    if ($split) {
+        $data['split'][] = [
+            'percentualValue' => 1,
+            'walletId' => '82fa6ccd-e353-43d4-826b-0da3442d96e2'
+        ];
+    }
+    $client = new Client();    
+    try {
+        $response = $client->post($apiUrl, [
+            'headers' => [
+                'Accept' => 'application/json', 
+                'Content-Type' => 'application/json',
+                'access_token' => $accessToken,
+            ],
+            'json' => $data, 
+        ]);
+
+        $responseBody = json_decode($response->getBody(), true);
+        return json_encode($responseBody, JSON_PRETTY_PRINT);
+        
+    } catch (RequestException $e) {
+        return $e->getResponse()->getBody();
+    }
+}
+
+function asaas_aplicar_cupom($paymentId, $type, $value) {
+    $options = asaas_get_options();
+    if (empty($options['token'])) {
+        return 'Erro: Token de API não encontrado.';
+    }
+
+    $apiUrl = $options['url'] . '/payments/' . $paymentId;
     $accessToken = $options['token'];
     $data = [       
         'discount' => [
@@ -146,7 +211,9 @@ function asaas_aplicar_cupom($paymentid, $type,$value) {
     } catch (RequestException $e) {
         return  $e->getResponse()->getBody();
     }
+
 }
+
 function asaas_pagar_cartao($paymentid, $holdername, $cardnumber, $expirymonth, $expiryyear, $ccv,$name,$email,$cpfcnpj,$phone,$postalcode,$addressnumber) {
     $options = asaas_get_options(); 
     if (empty($options['token'])) {
@@ -347,6 +414,54 @@ add_shortcode('asaas_criar_pagamento', function($atts) {
     
     return $resultado;
 });
+add_shortcode('asaas_criar_pagamento_parcelado_cartao', function($atts) {
+    $atts = shortcode_atts([
+        'customer' => '',
+        'value' => '',
+        'duedate' => '',
+        'description' => '',
+        'holdername' => '',
+        'cardnumber' => '',
+        'expirymonth' => '',
+        'expiryyear' => '',
+        'ccv' => '',
+        'name' => '',
+        'email' => '',
+        'cpfcnpj' => '',
+        'phone' => '',
+        'postalcode' => '',
+        'addressnumber' => '',
+        'installments' => 1,
+        'split' => false
+    ], $atts);
+
+    if (empty($atts['customer']) || empty($atts['value']) || empty($atts['duedate']) || empty($atts['cardnumber']) || empty($atts['ccv'])) {
+        return '<p>Erro: Todos os campos obrigatórios devem ser preenchidos.</p>';
+    }
+
+    // Chama a função para criar o pagamento parcelado
+    $resultado = asaas_criar_pagamento_parcelado_cartao(
+        esc_attr($atts['customer']),
+        esc_attr($atts['value']),
+        esc_attr($atts['duedate']),
+        esc_attr($atts['description']),
+        esc_attr($atts['holdername']),
+        esc_attr($atts['cardnumber']),
+        esc_attr($atts['expirymonth']),
+        esc_attr($atts['expiryyear']),
+        esc_attr($atts['ccv']),
+        esc_attr($atts['name']),
+        esc_attr($atts['email']),
+        esc_attr($atts['cpfcnpj']),
+        esc_attr($atts['phone']),
+        esc_attr($atts['postalcode']),
+        esc_attr($atts['addressnumber']),
+        esc_attr($atts['installments']),
+        esc_attr($atts['split'])
+    );
+
+    return $resultado;
+});
 add_shortcode('asaas_aplicar_cupom', function($atts) {
     $atts = shortcode_atts([
         'paymentid' => '',
@@ -401,3 +516,63 @@ add_shortcode('asaas_gerar_pix_qrcode', function($atts) {
     $resultado = asaas_gerar_pix_qrcode(esc_attr($atts['paymentid']));
     return $resultado;
 });
+
+
+// Função para cancelar o pagamento no Asaas utilizando a URL de exclusão
+function asaas_cancelar_pagamento($paymentid) {
+    $options = asaas_get_options(); 
+    if (empty($options['token'])) {
+        return 'Erro: Token de API não encontrado.';
+    }
+    $apiUrl = $options['url'] . '/payments/' . $paymentid;
+    $accessToken = $options['token'];
+    
+    $client = new Client();
+    
+    try {
+        // Realiza a requisição DELETE para cancelar a fatura
+        $response = $client->delete($apiUrl, [
+            'headers' => [
+                'Accept'       => 'application/json',
+                'Content-Type' => 'application/json',
+                'access_token' => $accessToken,
+            ]
+        ]);
+        
+        $responseBody = json_decode($response->getBody(), true);
+        return json_encode($responseBody, JSON_PRETTY_PRINT);
+    } catch (RequestException $e) {
+        if ($e->hasResponse()) {
+            return json_encode([
+                'error'       => 'Erro na API',
+                'message'     => (string) $e->getResponse()->getBody(),
+                'status_code' => $e->getResponse()->getStatusCode()
+            ], JSON_PRETTY_PRINT);
+        } else {
+            return json_encode([
+                'error'   => 'Erro na requisição',
+                'message' => $e->getMessage()
+            ], JSON_PRETTY_PRINT);
+        }
+    }
+}
+
+// Hook para detectar a remoção do post e cancelar o pagamento no Asaas
+add_action('before_delete_post', 'asaas_cancelar_pagamento_no_delete');
+function asaas_cancelar_pagamento_no_delete($post_id) {
+    // Verifica se o post é do tipo 'inscricao'
+    if (get_post_type($post_id) !== 'inscricao') {
+        return;
+    }
+    
+    // Recupera o paymentid salvo como meta com a key "id_pagamento"
+    $paymentid = get_post_meta($post_id, 'id_pagamento', true);
+    
+    if (!empty($paymentid)) {
+        // Chama a função de cancelamento do Asaas
+        $resultado = asaas_cancelar_pagamento($paymentid);
+        
+        // Opcional: registre o resultado em log para depuração
+        error_log("Cancelamento do pagamento {$paymentid}: " . $resultado);
+    }
+}

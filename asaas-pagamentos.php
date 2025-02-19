@@ -95,6 +95,7 @@ function asaas_pagamentos_settings_init() {
     $post_fields = [        
         'tipo_post' => 'Tipo de Post',
         'id_pagamento'=>'ID Pagamento',
+        'installment'=>'ID Parcelamento',
         'data_pagamento'=>'Data de Pagamento',
         'status'=>'Status Pagamento',  
         'pago'=>'Status Controle'
@@ -154,7 +155,7 @@ function asaas_pagamentos_field_callback($args) {
         echo "<p class='description'>Tempo limite em segundos (padrão: 30).</p>";
     } elseif ($field === 'tipo_post') {
         $value = isset($options[$field]) ? $options[$field] : '';
-        $post_types = get_post_types(['public' => true], 'objects'); // Apenas post types públicos
+        $post_types = get_post_types(['public' => true], 'objects'); 
         echo "<select id='tipo_post' name='asaas_pagamentos_options[$field]'>";
         foreach ($post_types as $post_type => $post_type_obj) {
             echo "<option value='$post_type' " . selected($value, $post_type, false) . ">{$post_type_obj->labels->name}</option>";
@@ -220,65 +221,83 @@ function asaas_criar_webhook_callback(WP_REST_Request $request) {
 }
 function asaas_webhook_callback(WP_REST_Request $request) {
     error_log('Rota /webhook chamada!');
-    //retornar 200
+    
     $options = get_option('asaas_pagamentos_options', []);
-    $dados_webhook = file_get_contents("php://input");
-    $dados_webhook = json_decode($dados_webhook);
-    if(isset($dados_webhook->payment->id)){
-        $status = $dados_webhook->payment->status;
-        $forma_pagamento = $dados_webhook->payment->billingType;
-        $data_pagamento = null;
-        if ($forma_pagamento === 'CREDIT_CARD') {
-            $data_pagamento = $dados_webhook->payment->confirmedDate;
-        }
-        if ($forma_pagamento === 'PIX') {
-            if ($dados_webhook->payment->pixTransaction) {
-                $data_pagamento = $dados_webhook->payment->pixTransaction->receivedDate;
+    $dados_webhook = json_decode(file_get_contents("php://input"));
+    
+    if (!isset($dados_webhook->payment)) {
+        return;
+    }
+    
+    $payment = $dados_webhook->payment;
+    $status = $payment->status;
+    $forma_pagamento = $payment->billingType;
+    $foi_pago = in_array($status, ['CONFIRMED', 'RECEIVED']);
+    $vencido = in_array($status, ['OVERDUE', 'CANCELLED', 'REFUNDED', 'FAILED']);
+    $data_pagamento = $payment->confirmedDate ?? null;
+    
+    if ($forma_pagamento === 'PIX' && isset($payment->pixTransaction)) {
+        $data_pagamento = $payment->pixTransaction->receivedDate;
+    }
+    
+    $meta_key = isset($payment->installment) ? $options['installment'] : $options['id_pagamento'];
+    $meta_value = isset($payment->installment) ? $payment->installment : $payment->id;
+    
+    $wp_query = new WP_Query([
+        'post_type'      => $options['tipo_post'],
+        'order'          => 'DESC',
+        'posts_per_page' => 1,
+        'meta_query'     => [['key' => $meta_key, 'compare' => '=', 'value' => $meta_value]]
+    ]);
+    
+    if ($wp_query->have_posts()) {
+        while ($wp_query->have_posts()) {
+            $wp_query->the_post();
+            $post_id = get_the_ID();
+            $cupom_desconto = get_field('cupom_desconto', $post_id);
+            
+            if ($foi_pago) {
+                atualizar_post_pago($post_id, $options, $status, $forma_pagamento, $data_pagamento, $cupom_desconto, isset($payment->installment));
+            }else{
+                if(isset($payment->installment)){
+                    update_post_meta($post_id, $options['status'], '');
+                    update_post_meta($post_id, $options['pago'], false);
+                }
+            }
+            
+            if ($vencido) {
+                marcar_post_como_rascunho($post_id, $cupom_desconto);
             }
         }
-        $foi_pago = in_array($status, ['CONFIRMED', 'RECEIVED']);
-        $vencido = in_array($status, ['OVERDUE','CANCELLED', 'REFUNDED', 'FAILED']);
-        $wp_query = new WP_Query(array(
-            'post_type'      => $options['tipo_post'],
-            'order' => 'DESC',
-            'posts_per_page' => '1',
-            'meta_query'     => array(
-                'relation' => 'AND',
-                array(
-                    'key'   => $options['id_pagamento'],
-                    'compare' => '=',
-                    'value' => $dados_webhook->payment->id
-                )
-            )
-
-        ));
-        if ($wp_query->have_posts()) :
-            while ($wp_query->have_posts()) : $wp_query->the_post();
-                $post_id = get_the_ID();
-                $cupom_desconto = get_field('cupom_desconto', $post_id);
-                if ($foi_pago) { 
-                    update_post_meta($post_id, $options['status'], $status);
-                    update_post_meta($post_id, $options['data_pagamento'], $data_pagamento);
-                    update_post_meta($post_id, $options['pago'], $foi_pago);
-                    if($cupom_desconto){
-                        $utilizados = get_field('utilizados',$cupom_desconto);               
-                        update_post_meta($cupom_desconto, 'utilizados', $utilizados+1);
-                    }
-                }
-                if($vencido){
-                    wp_update_post(array(
-                        'ID' => $post_id,
-                        'post_status' => 'draft'
-                    ));
-                    if($cupom_desconto){
-                        $utilizados = get_field('utilizados',$cupom_desconto);               
-                        update_post_meta($cupom_desconto, 'utilizados', $utilizados-1);
-                    }
-                }
-            endwhile;
-        endif;
-        wp_reset_query();        
     }
-   
+    
+    wp_reset_query();
 }
+
+function atualizar_post_pago($post_id, $options, $status, $forma_pagamento, $data_pagamento, $cupom_desconto, $is_installment) {
+    update_post_meta($post_id, $options['status'], $status);
+    update_post_meta($post_id, 'forma_pagamento', $forma_pagamento);
+    update_post_meta($post_id, $options['data_pagamento'], $data_pagamento);
+    update_post_meta($post_id, $options['pago'], true);
+    
+    if ($is_installment) {
+        asaas_cancelar_pagamento(get_field('id_pagamento', $post_id));
+        update_post_meta($post_id, $options['id_pagamento'], '');
+    }
+    
+    if ($cupom_desconto) {
+        $utilizados = get_field('utilizados', $cupom_desconto) + 1;
+        update_post_meta($cupom_desconto, 'utilizados', $utilizados);
+    }
+}
+
+function marcar_post_como_rascunho($post_id, $cupom_desconto) {
+    wp_update_post(['ID' => $post_id, 'post_status' => 'draft']);
+    
+    if ($cupom_desconto) {
+        $utilizados = get_field('utilizados', $cupom_desconto) - 1;
+        update_post_meta($cupom_desconto, 'utilizados', $utilizados);
+    }
+}
+
 
