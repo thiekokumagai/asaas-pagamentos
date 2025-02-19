@@ -293,11 +293,6 @@ function atualizar_post_pago($post_id, $options, $status, $forma_pagamento, $dat
 
 function marcar_post_como_rascunho($post_id, $cupom_desconto) {
     wp_update_post(['ID' => $post_id, 'post_status' => 'draft']);
-    
-    if ($cupom_desconto) {
-        $utilizados = get_field('utilizados', $cupom_desconto) - 1;
-        update_post_meta($cupom_desconto, 'utilizados', $utilizados);
-    }
 }
 
 
